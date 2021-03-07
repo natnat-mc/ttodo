@@ -1,0 +1,877 @@
+#!/usr/bin/env lua
+
+do
+
+do
+local _ENV = _ENV
+package.preload[ "todo.ansi" ] = function( ... ) local arg = _G.arg;
+local ansi = {}
+
+local csi = string.char(0x1b).."["
+ansi.csi = csi
+
+-- colors
+ansi.color = {}
+setmetatable(ansi.color, ansi.color)
+
+-- normal colors
+local colormt = {}
+colormt.__index = colormt
+function colormt:new(code)
+	return setmetatable({code}, self)
+end
+
+function colormt:__tostring()
+	return csi.."3"..self[1].."m"
+end
+function colormt:__concat(x)
+	return tostring(self)..tostring(x)
+end
+function colormt:__call(variant)
+	if variant==nil or variant=='normal' then
+		return tostring(self)
+	elseif variant=='bright' then
+		return csi.."9"..self[1].."m"
+	elseif variant=="bg" then
+		return csi.."4"..self[1].."m"
+	elseif variant=="brightbg" or variant=="bgbright" then
+		return csi.."10"..self[1].."m"
+	else
+		error("Invalid variant "..variant)
+	end
+end
+for k, v in pairs{
+	black=0,
+	red=1,
+	green=2,
+	yellow=3,
+	blue=4,
+	magenta=5,
+	cyan=6,
+	white=7
+} do
+	ansi.color[k] = colormt:new(v)
+end
+
+-- any color
+function ansi.color:__call(r, g, b, bg)
+	if r and g and b then
+		if bg then
+			return csi.."48;2;"..r..";"..g..";"..b.."m"
+		else
+			return csi.."38;2;"..r..";"..g..";"..b.."m"
+		end
+	elseif type(r)=='string' then
+		return ansi.color[r](g)
+	elseif r<=7 then
+		if g then
+			return csi.."4"..r.."m"
+		else
+			return csi.."3"..r.."m"
+		end
+	else
+		if g then
+			return csi.."48;5;"..r.."m"
+		else
+			return csi.."38;5;"..r.."m"
+		end
+	end
+end
+
+-- reset color
+ansi.color.reset = setmetatable({csi.."0m"}, {
+	__call=function(self) return self[1] end,
+	__tostring=function(self) return self[1] end,
+	__concat=function(a, b) return tostring(a)..tostring(b) end
+})
+
+-- cursor
+ansi.cursor = {}
+setmetatable(ansi.cursor, ansi.cursor)
+
+function ansi.cursor.up(n)
+	if not n then n = 1 end
+	return csi..n.."A"
+end
+function ansi.cursor.down(n)
+	if not n then n = 1 end
+	return csi..n.."B"
+end
+function ansi.cursor.forward(n)
+	if not n then n = 1 end
+	return csi..n.."C"
+end
+function ansi.cursor.back(n)
+	if not n then n = 1 end
+	return csi..n.."D"
+end
+function ansi.cursor.set(x, y)
+	return csi..y..";"..x.."H"
+end
+function ansi.cursor.save()
+	return csi.."s"
+end
+function ansi.cursor.restore()
+	return csi.."u"
+end
+function ansi.cursor.show()
+	return csi.."?25h"
+end
+function ansi.cursor.hide()
+	return csi.."?25l"
+end
+function ansi.cursor:__call(x, y)
+	return ansi.cursor.set(x, y)
+end
+
+-- display
+ansi.display = {}
+setmetatable(ansi.display, ansi.display)
+
+function ansi.display.clear()
+	return csi.."2J"
+end
+function ansi.display.alternative()
+	return csi.."?1049h"
+end
+function ansi.display.normal()
+	return csi.."?1049l"
+end
+
+-- parse
+function ansi.parse(code)
+	if code:sub(1, 1) ~= string.char(0x1b) then return nil end
+	code = code:sub(2)
+	return ({
+		[""]="ESC",
+		["[A"]="UP",
+		["[B"]="DOWN",
+		["[C"]="RIGHT",
+		["[D"]="LEFT"
+	})[code]
+end
+
+return ansi
+
+end
+end
+
+do
+local _ENV = _ENV
+package.preload[ "todo.todos" ] = function( ... ) local arg = _G.arg;
+local todomt = {}
+todomt.__get = {}
+todomt.__set = {}
+todomt.__index = function(self, k)
+	local getter = todomt.__get[k]
+	if getter then
+		return getter(self, k)
+	end
+	return todomt[k]
+end
+todomt.__newindex = function(self, k, v)
+	local setter = todomt.__set[k]
+	if setter then
+		return setter(self, v, k)
+	end
+	return rawset(self, k, v)
+end
+function todomt:new(data)
+	return setmetatable(data, todomt)
+end
+
+function todomt.__get:statusnum()
+	return ({
+		w=-1,
+		h=1,
+		x=2,
+		p=3,
+		f=4
+	})[self.s] or 0
+end
+function todomt.__get:status()
+	return ({
+		w="working",
+		h="hold",
+		x="done",
+		p="partial",
+		f="failed"
+	})[self.s] or "todo"
+end
+
+function todomt.__get:europeandate()
+	if self.d then
+		local y, m, d = self.d:match "^(%d%d%d%d)(%d%d)(%d%d)$"
+		if y then
+			return d..'/'..m..'/'..y
+		end
+	end
+end
+function todomt.__get:americandate()
+	if self.d then
+		local y, m, d = self.d:match "^(%d%d%d%d)(%d%d)(%d%d)$"
+		if y then
+			return m..'/'..d..'/'..y
+		end
+	end
+end
+function todomt.__get:betterdate()
+	if self.d then
+		local y, m, d = self.d:match "^(%d%d%d%d)(%d%d)(%d%d)$"
+		if y then
+			return y..'-'..m..'-'..d
+		end
+	end
+end
+function todomt.__get:date()
+	return self.d
+end
+
+function todomt:__tostring()
+	local t, n = {self[1]}, 2
+	for k, v in pairs(self) do
+		if type(k) ~= 'number' then
+			t[n], n = " +", n+1
+			t[n], n = k, n+1
+			t[n], n = "[", n+1
+			t[n], n = v, n+1
+			t[n], n = "]", n+1
+		end
+	end
+	return table.concat(t, nil, 1, n-1)
+end
+function todomt.__get:text()
+	return self[1]
+end
+
+local todos = {}
+function todos.load()
+	local fd = io.open(os.getenv("HOME").."/.todofile", 'r')
+	if not fd then
+		todos.list = {}
+		return
+	end
+	local list, n = {}, 1
+	for l in fd:lines() do
+		local data = {}
+		data[1] = l:gsub("%s*%+(%S+)%[([^%]]*)%]%s*", function(k, v)
+			data[k] = v
+			return ""
+		end)
+		list[n], n = todomt:new(data), n+1
+	end
+	fd:close()
+	todos.list = list
+end
+
+function todos.save()
+	local fd = assert(io.open(os.getenv("HOME").."/.todofile", 'w'))
+	for _, todo in ipairs(todos.list) do
+		fd:write(tostring(todo), "\n")
+	end
+	fd:close()
+	return true
+end
+
+function todos.sort(fields)
+	table.sort(todos.list, function(a, b)
+		for _, field in ipairs(fields) do
+			local fa, fb = a[field], b[field]
+			if fa and fb then
+				if fa<fb then return true end
+				if fa>fb then return false end
+			end
+		end
+		return false
+	end)
+end
+
+function todos.each()
+	local i = 1
+	return function()
+		local e = todos.list[i]
+		i = i + 1
+		return e
+	end
+end
+
+function todos.new(title, data)
+	if not data then data = {} end
+	data[1] = title
+	table.insert(todos.list, todomt:new(data))
+	return true
+end
+
+return todos
+
+end
+end
+
+do
+local _ENV = _ENV
+package.preload[ "todo.tui" ] = function( ... ) local arg = _G.arg;
+local ansi = require 'todo.ansi'
+
+local screenw, screenh
+
+local window = {}
+window.__index = window
+function window:new(x, y, w, h)
+	if not x then x = 1 end
+	if not y then y = 1 end
+	if not w then w = '#-2' end
+	if not h then h = '#-2' end
+	return setmetatable({x=x, y=y, w=w, h=h}, self)
+end
+
+function window:recalcsize()
+	local fd = assert(io.popen('tput cols', 'r'))
+	screenw = tonumber(assert(fd:read '*a'))
+	fd:close()
+	fd = assert(io.popen('tput lines', 'r'))
+	screenh = tonumber(assert(fd:read '*a'))
+	fd:close()
+end
+
+function window:drawall(...)
+	local t = {ansi.display.clear()}
+	for i=1, select("#", ...) do
+		local x = select(i, ...)
+		if not x.draw then
+			for _, e in ipairs(x) do
+				e:draw(t)
+			end
+		else
+			x:draw(t)
+		end
+	end
+	io.write(table.concat(t))
+	io.flush()
+end
+
+function window:with(fn)
+	local winlist = {}
+
+	io.write(ansi.display.clear(), ansi.cursor.hide(), ansi.display.alternative())
+	io.flush()
+	os.execute('stty min 1 time 0 -icanon -echo')
+	io.stdin:setvbuf('no')
+
+	local coro = coroutine.create(fn)
+	local ok, err = coroutine.resume(coro, winlist)
+	if not ok then error(err) end
+	while coroutine.status(coro) ~= "dead" do
+		window:drawall(winlist)
+		local input = io.read(1)
+		if input == string.char(0x1b) then
+			local chars, n, c = {input}, 2, nil
+			repeat
+				c = io.read(1)
+				if c == nil or c == string.char(0x1b) then break end
+				chars[n], n = c, n+1
+			until c:match "[a-zA-Z]"
+			input = table.concat(chars, nil, 1, n-1)
+		end
+		window:recalcsize()
+		ok, err = coroutine.resume(coro, input)
+		if not ok then error(err) end
+	end
+
+	io.stdin:setvbuf('line')
+	os.execute('stty sane')
+	io.write(ansi.cursor.show(), ansi.display.normal(), ansi.cursor(1, 1))
+	io.flush()
+end
+
+function window:draw(buf)
+	local putbuf = false
+	if not buf then
+		buf = {}
+		putbuf = true
+	end
+	local n = #buf+1
+
+	local function w(x)
+		if type(x) == 'function' or type(x) == 'table' then
+			x = x()
+		end
+		buf[n], n = x, n+1
+	end
+
+	local _x, _y, _w, _h = self:realx(), self:realy(), self:realw(), self:realh()
+	w(ansi.cursor(_x, _y))
+	w(ansi.color.reset)
+	w("┏")
+	w(string.rep("━", _w))
+	w("┓")
+	for y=1, _h do
+		w(ansi.cursor(_x, y+_y))
+		w("┃")
+		local line = self[y] or {}
+		local llen = 0
+		for _, p in ipairs(line) do
+			local txt, ctrl = p[1], p[2]
+			llen = llen + #txt
+			if ctrl then w(ctrl) end
+			w(txt)
+			if ctrl then w(ansi.color.reset) end
+		end
+		w(string.rep(" ", _w-llen))
+		w("┃")
+	end
+	w(ansi.cursor(_x, _y+_h+1))
+	w("┗")
+	w(string.rep("━", _w))
+	w("┛")
+
+	if putbuf then
+		io.write(table.concat(buf, nil, 1, n-1))
+		io.flush()
+	end
+end
+
+function window:real(v, d)
+	if type(v) == 'number' then
+		return v
+	end
+	local dim
+	if d=='w' then dim=screenw
+	elseif d=='h' then dim=screenh
+	elseif d=='ww' then dim=self:realw()
+	elseif d=='wh' then dim=self:realh()
+	end
+	return math.floor((loadstring or load)("return "..v:gsub('#', dim))())
+end
+function window:realx() return self:real(self.x, 'w') end
+function window:realy() return self:real(self.y, 'h') end
+function window:realw() return self:real(self.w, 'w') end
+function window:realh() return self:real(self.h, 'h') end
+
+function window:locate(x, y, txt, ctr)
+	x, y, w = self:real(x, 'ww'), self:real(y, 'wh'), self:realw()
+	txt = tostring(txt)
+	local sx, ex = x, x+#txt
+
+	-- here be dragons
+	-- no idea why it works, if it doesn't break, don't fix it
+	local t = self[y]
+	if not t then
+		t = {}
+		self[y] = t
+	end
+	local _x = 1
+	local i, n = 1, #t
+	while i <= n do
+		local b = t[i]
+		local e = b[1]
+		_x = _x+#e
+		if _x >= sx then
+			local dx = _x-sx
+			b[1] = e:sub(1, -dx-1)
+			i = i + 1
+			table.insert(t, i, {txt, ctr})
+			if _x > ex then
+				i = i + 1
+				table.insert(t, i, {e:sub(ex+#e-_x+1), b[2]})
+			end
+			while i <= n and _x < ex do
+				b = table.remove(t, i+1)
+				if b == nil then return end
+				_x = _x+#b[1]
+				if _x > ex then
+					table.insert(t, i+1, {b[1]:sub(ex-_x), b[2]})
+				end
+			end
+			return
+		end
+		i = i + 1
+	end
+	if _x < sx then
+		table.insert(t, {string.rep(" ", sx-_x)})
+	end
+	table.insert(t, {txt, ctr})
+end
+function window:locatecenter(y, txt, ctr)
+	txt = tostring(txt)
+	return self:locate("#/2+1-"..(#txt/2), y, txt, ctr)
+end
+function window:write(x, y, ...)
+	x = self:real(x, "ww")
+	for i=1, select('#', ...), 2 do
+		local txt, ctr = select(i, ...)
+		txt = tostring(txt)
+		self:locate(x, y, txt, ctr)
+		x = x + #txt
+	end
+end
+
+function window:clearline(y)
+	self[self:real(y, "wh")] = {}
+end
+function window:clear()
+	for y=1, self:realw() do
+		self[y] = {}
+	end
+end
+
+window:recalcsize()
+
+return window
+
+end
+end
+
+do
+local _ENV = _ENV
+package.preload[ "todo.util" ] = function( ... ) local arg = _G.arg;
+local ansi = require 'todo.ansi'
+
+local util = {}
+
+function util.writei(table, str)
+	str = str
+		:gsub("${([^:]-):(.-)}", function(k, fmt)
+			local v = table[k]
+			local n = tonumber(fmt)
+			if v then
+				v = tostring(v)
+				return v..string.rep(" ", n-#v)
+			end
+			return string.rep(".", n)
+		end)
+		:gsub("${(.-)}", function(k)
+			return table[k] or "..."
+		end)
+		:gsub("#{(.-),(.-),(.-)}", function(r, g, b)
+			return ansi.color(r, g, b)
+		end)
+		:gsub("#{(.-)}", function(color)
+			return ansi.color(color)
+		end)
+	return io.write(str)
+end
+function util.printi(table, str)
+	return util.writei(table, str.."\n")
+end
+
+function util.lpad(str, len, fill)
+	str = tostring(str)
+	return fill:rep(len-#str)..str
+end
+
+return util
+
+end
+end
+
+end
+
+
+local todos = require 'todo.todos'
+local util = require 'todo.util'
+local ansi = require 'todo.ansi'
+local tui = require 'todo.tui'
+
+local sort = {"statusnum", "date", "text"}
+
+local commands = {}
+
+function commands.show()
+	todos.load()
+	todos.sort(sort)
+	for todo in todos.each() do
+		util.printi(todo, "[#{green}${betterdate:10}#{reset}] [#{cyan}${status:7}#{reset}] ${text}")
+	end
+end
+
+function commands.edit()
+	local editor = os.getenv("EDITOR") or os.getenv("VISUAL") or "vi"
+	return os.execute(editor.." "..os.getenv("HOME").."/.todofile")
+end
+commands.vi = commands.edit
+
+function commands.cat()
+	todos.load()
+	for todo in todos.each() do
+		print(todo)
+	end
+end
+
+function commands.tui()
+	todos.load()
+	todos.sort(sort)
+	tui:with(function(windows)
+		local listwin = tui:new(1, 1, "#-2", 1)
+		local actionwin = tui:new(1, "#-4", "#-2", 3)
+		table.insert(windows, listwin)
+		table.insert(windows, actionwin)
+
+		local cursor = 1
+		local windowstart = 1
+		local updated = false
+
+		local function updatelistwin()
+			local ntodos = #todos.list
+			local maxh = listwin:real("#-7", "h")
+			if ntodos == 0 then
+				cursor = nil
+				windowstart = 1
+				listwin.h = 1
+				local msg = "No todos yet"
+				listwin:clear()
+				listwin:write("#/2+1-"..(#msg/2), 1, msg, ansi.color.yellow)
+			else
+				if cursor == nil then cursor = 1 end
+				if cursor > ntodos then cursor = ntodos end
+				if cursor < windowstart then windowstart = cursor end
+				if cursor >= windowstart+maxh then windowstart = cursor-maxh+1 end
+				listwin.h = math.min(ntodos, maxh)
+				listwin:clear()
+				for i=windowstart, windowstart+maxh-1 do
+					local todo = todos.list[i]
+					if not todo then break end
+					listwin:write(3, i-windowstart+1, todo.betterdate or "no date", ansi.color.green)
+					listwin:write(14, i-windowstart+1, todo.status, ansi.color.cyan)
+					listwin:write(22, i-windowstart+1, todo.text)
+				end
+				listwin:write(1, cursor-windowstart+1, ">", ansi.color.yellow 'bright')
+				listwin:write("#", cursor-windowstart+1, "<", ansi.color.yellow 'bright')
+				if windowstart ~= 1 then
+					listwin:write(2, 1, "|", ansi.color.blue 'bright')
+					listwin:write("#-1", 1, "|", ansi.color.blue 'bright')
+				else
+					listwin:write(2, 1, " ")
+					listwin:write("#-1", 1, " ")
+				end
+				if windowstart+maxh <= ntodos then
+					listwin:write(2, "#", "|", ansi.color.blue 'bright')
+					listwin:write("#-1", "#", "|", ansi.color.blue 'bright')
+				else
+					listwin:write(2, "#", " ")
+					listwin:write("#-1", "#", " ")
+				end
+			end
+
+			if updated then
+				actionwin:write(81, "#", "*", ansi.color.green 'bright')
+			else
+				actionwin:write(81, "#", " ")
+			end
+		end
+		updatelistwin()
+
+		local function popup(text, title)
+			local popup = tui:new("#/8-1", "#/3-1", "#/4*3", "#/3")
+			text = tostring(text)
+			popup:locatecenter("#/2", text)
+			if title then
+				popup:locatecenter(1, title, ansi.color.yellow 'bright')
+			end
+			table.insert(windows, popup)
+			coroutine.yield()
+			table.remove(windows)
+		end
+
+		local function confirm(text, title)
+			local popup = tui:new("#/8-1", "#/3-1", "#/4*3", "#/3")
+			text = tostring(text)
+			popup:locatecenter("#/2", text)
+			if title then
+				popup:locatecenter(1, title, ansi.color.yellow 'bright')
+			end
+			popup:write("#/2-8", "#",
+				"ENTER", ansi.color.yellow, ": yes ", nil,
+				"x", ansi.color.yellow, ": no"
+			)
+			table.insert(windows, popup)
+			while true do
+				local input = coroutine.yield()
+				if input == '\n' then
+					table.remove(windows)
+					return true
+				elseif input == 'x' then
+					table.remove(windows)
+					return false
+				end
+			end
+		end
+
+		local function sorttodos()
+			if not cursor then return end
+			local todo = todos.list[cursor]
+			todos.sort(sort)
+			for i, t in ipairs(todos.list) do
+				if t==todo then
+					cursor = i
+					return
+				end
+			end
+		end
+
+		actionwin:write(2, 1, "n", ansi.color.yellow, ": New") 
+		actionwin:write(2, 2, "d", ansi.color.yellow, ": Delete")
+		actionwin:write(2, 3, "q", ansi.color.yellow, ": Quit")
+		actionwin:write(19, 1, "x", ansi.color.yellow, ": Mark as done")
+		actionwin:write(19, 2, "p", ansi.color.yellow, ": Mark as partially done")
+		actionwin:write(19, 3, "f", ansi.color.yellow, ": Mark as failed")
+		actionwin:write(49, 1, "h", ansi.color.yellow, ": Mark as on hold")
+		actionwin:write(49, 2, "w", ansi.color.yellow, ": Mark as working")
+		actionwin:write(49, 3, "t", ansi.color.yellow, ": Mark as todo")
+		actionwin:write(79, 1, "z", ansi.color.yellow, ": Set date")
+		actionwin:write(79, 2, "r", ansi.color.yellow, ": Rename")
+		actionwin:write(79, 3, "s", ansi.color.yellow, ": Save todos")
+
+		local commands = {}
+		function commands.q()
+			if updated and not confirm("Exit without saving?", "Exit") then return end
+			return {exit=true}
+		end
+		function commands.s()
+			if not confirm("Save changes?", "Save") then return end
+			todos.save()
+			popup("Successfully saved todos", "Save")
+			updated = false
+		end
+		function commands.d()
+			if not cursor then return end
+			if not confirm("Remove todo \""..todos.list[cursor].text..'"?', "Remove") then return end
+			table.remove(todos.list, cursor)
+			updated = true
+		end
+		for _, c in ipairs({"x", "p", "f", "h", "w", "t"}) do
+			commands[c] = function()
+				if not cursor then return end
+				todos.list[cursor].s = c
+				updated = true
+			end
+		end
+		local n = 1
+		function commands.n()
+			local title = "New todo #"..n
+			n = n + 1
+			todos.new(title, {d=os.date("%Y%m%d")})
+			cursor = #todos.list
+			commands.r()
+			commands.z()
+			updated = true
+		end
+		function commands.z()
+			if not cursor then return end
+			local todo = todos.list[cursor]
+			local win = tui:new("#/2-10", "#/2-3", 18, 6)
+			win:locatecenter(1, "Set date", ansi.color.yellow 'bright')
+			win:write(3, "#-1", "x", ansi.color.yellow, ": Remove date")
+			win:write(6, "#", "ENTER", ansi.color.yellow, ": OK")
+			table.insert(windows, win)
+
+			local y, m, d
+			if todo.date then
+				y, m, d = todo.date:match("(%d%d%d%d)(%d%d)(%d%d)")
+			end
+			if not y then
+				y, m, d = os.date("%Y%m%d"):match("(%d%d%d%d)(%d%d)(%d%d)")
+			end
+			y, m, d = tonumber(y), tonumber(m), tonumber(d)
+			local cursor = 1
+
+			while true do
+				win:clearline(3)
+				win:write(2, 3,
+					"Date: ", nil,
+					util.lpad(y, 4, '0'), ansi.color[cursor==1 and 'green' or 'yellow'] 'bright',
+					'/', nil,
+					util.lpad(m, 2, '0'), ansi.color[cursor==2 and 'green' or 'yellow'] 'bright',
+					'/', nil,
+					util.lpad(d, 2, '0'), ansi.color[cursor==3 and 'green' or 'yellow'] 'bright'
+				)
+				local input = coroutine.yield()
+				if input == 'x' then
+					todo.d = nil
+					break
+				elseif input == '\n' then
+					todo.d = util.lpad(y, 4, '0')..util.lpad(m, 2, '0')..util.lpad(d, 2, '0')
+					break
+				end
+				input = ansi.parse(input)
+				if input == "UP" then
+					if cursor==1 then y = y-1
+					elseif cursor==2 then m = m-1
+					else d = d-1 end
+				elseif input == "DOWN" then
+					if cursor==1 then y = y+1
+					elseif cursor==2 then m = m+1
+					else d = d+1 end
+				elseif input == "LEFT" then
+					cursor = cursor - 1
+					if cursor==0 then cursor = 3 end
+				elseif input == "RIGHT" then
+					cursor = cursor + 1
+					if cursor==4 then cursor = 1 end
+				end
+				if y<1970 then y=1970 end
+				if m<1 then m=1 end
+				if d<1 then d=1 end
+				if y>9999 then y=9999 end
+				if m>12 then m=12 end
+				if d>31 then d=31 end
+			end
+
+			table.remove(windows)
+			updated = true
+		end
+		function commands.r()
+			if not cursor then return end
+			local todo = todos.list[cursor]
+
+			local win = tui:new(1, "#/2-4", "#-2", 5)
+			win:locatecenter(1, "Rename", ansi.color.yellow 'bright')
+			win:write("#/2-4", "#", "ENTER", ansi.color.yellow, ": OK")
+			table.insert(windows, win)
+
+			local name = todo.text
+			while true do
+				win:clearline(3)
+				win:write(2, 3, "Title: \"", nil, name, ansi.color.green 'bright', "\"")
+
+				local input = coroutine.yield()
+				if input == '\n' then
+					todo[1] = name
+					break
+				elseif input == string.char(127) then
+					name = name:sub(1, -2)
+				elseif input:match("^[-a-zA-Z0-9_ \"',:;!%?%.$%*%(%)~%%%[%]{}%^<>#|\\/@=&]") then
+					name = name..input
+				end
+			end
+
+			table.remove(windows)
+			updated = true
+		end
+
+		while true do
+			local c = coroutine.yield()
+			if commands[c] then
+				local ret = commands[c]()
+				if type(ret) == 'table' and ret.exit then return end
+				sorttodos()
+				updatelistwin()
+			else
+				local key = ansi.parse(c)
+				if key=="UP" and cursor then
+					cursor = cursor-1
+					if cursor < 1 then cursor = #todos.list end
+					updatelistwin()
+				elseif key=="DOWN" and cursor then
+					cursor = cursor + 1
+					if cursor > #todos.list then cursor = 1 end
+					updatelistwin()
+				end
+			end
+		end
+	end)
+end
+
+local cmd = ...
+if cmd == nil then cmd = "tui" end
+cmd = commands[cmd] or error("No such command "..cmd)
+return cmd(select(2, ...))
