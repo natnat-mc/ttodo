@@ -1,3 +1,5 @@
+local todofile = os.getenv("TODOFILE") or os.getenv("HOME").."/.todofile"
+
 local todomt = {}
 todomt.__get = {}
 todomt.__set = {}
@@ -85,7 +87,7 @@ end
 
 local todos = {}
 function todos.load()
-	local fd = io.open(os.getenv("HOME").."/.todofile", 'r')
+	local fd = io.open(todofile, 'r')
 	if not fd then
 		todos.list = {}
 		return
@@ -104,7 +106,7 @@ function todos.load()
 end
 
 function todos.save()
-	local fd = assert(io.open(os.getenv("HOME").."/.todofile", 'w'))
+	local fd = assert(io.open(todofile, 'w'))
 	for _, todo in ipairs(todos.list) do
 		fd:write(tostring(todo), "\n")
 	end
@@ -112,7 +114,9 @@ function todos.save()
 	return true
 end
 
+todos.defaultsort = {"statusnum", "date", "text"}
 function todos.sort(fields)
+	if not fields then fields = todos.defaultsort end
 	table.sort(todos.list, function(a, b)
 		for _, field in ipairs(fields) do
 			local fa, fb = a[field], b[field]
@@ -140,5 +144,8 @@ function todos.new(title, data)
 	table.insert(todos.list, todomt:new(data))
 	return true
 end
+
+todos.todofile = todofile
+todos.todomt = todomt
 
 return todos
