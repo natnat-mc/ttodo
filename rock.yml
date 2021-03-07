@@ -6,6 +6,7 @@ description:
     detailed: >
         ttodo is a small tool to handle your todo list.
         It supports a CLI and a TUI.
+        Requires tput and stty.
 homepage: https://github.com/natnat-mc/ttodo
 dependencies:
     - lua >= 5.1
